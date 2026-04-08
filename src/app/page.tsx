@@ -1,17 +1,26 @@
+import Link from "next/link";
 import { desc } from "drizzle-orm";
-import { db } from "@/db";
+import { getDb } from "@/db";
 import { todos } from "@/db/schema";
 import { addTodo, deleteTodo, toggleTodo } from "@/actions/todo";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const list = await db.select().from(todos).orderBy(desc(todos.id));
+  const list = await getDb().select().from(todos).orderBy(desc(todos.id));
 
   return (
     <div className="mx-auto flex min-h-full max-w-lg flex-col gap-8 px-4 py-12">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Todo</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold tracking-tight">Todo</h1>
+          <Link
+            href="/tasks"
+            className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+          >
+            Scheduled Tasks →
+          </Link>
+        </div>
         <p className="mt-1 text-sm text-zinc-500">
           Stored in SQLite (<code className="rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800">data/sqlite.db</code>)
         </p>

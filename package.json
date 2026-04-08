@@ -9,7 +9,8 @@
     "lint": "eslint",
     "db:push": "mkdir -p data && drizzle-kit push",
     "automation:db:push": "mkdir -p data && drizzle-kit push --config=drizzle.automation.config.ts",
-    "worker": "tsx src/automation/index.ts"
+    "worker": "tsx src/automation/index.ts",
+    "test:e2e": "playwright test && node scripts/generate-failed-md.mjs || node scripts/generate-failed-md.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
@@ -20,9 +21,11 @@
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "undici": "^8.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cron": "^2.0.1",

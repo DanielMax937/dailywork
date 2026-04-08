@@ -4,7 +4,15 @@ export const tasks = sqliteTable("tasks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   cronExpr: text("cron_expr").notNull(),
-  command: text("command").notNull(),
+  /**
+   * "shell"   — run `command` via execa (original behaviour)
+   * "rednote" — call blog2media rednote API; `taskConfig` holds the JSON config
+   */
+  taskType: text("task_type").notNull().default("shell"),
+  /** For shell tasks: the shell command. For rednote tasks: unused (kept for schema compat). */
+  command: text("command").notNull().default(""),
+  /** JSON string. For rednote tasks: { "url": "https://..." } */
+  taskConfig: text("task_config"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .notNull()

@@ -1,6 +1,6 @@
 import { CronJob } from "cron";
 import { eq } from "drizzle-orm";
-import { automationDb as db } from "./db";
+import { getAutomationDb } from "./db";
 import { tasks } from "./db/schema";
 import { assertValidCron, toCronTime } from "./cron-expr";
 
@@ -19,6 +19,7 @@ export function stopScheduler(): void {
 export async function startScheduler(runTask: RunFn): Promise<void> {
   stopScheduler();
 
+  const db = getAutomationDb();
   const rows = await db.select().from(tasks).where(eq(tasks.enabled, true));
 
   for (const task of rows) {

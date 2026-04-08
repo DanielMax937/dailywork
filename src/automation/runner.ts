@@ -1,7 +1,8 @@
 import { execaCommand } from "execa";
 import { eq } from "drizzle-orm";
-import { automationDb as db } from "./db";
+import { getAutomationDb } from "./db";
 import { runLogs, tasks } from "./db/schema";
+import { callRednoteApi } from "@/lib/rednote-client";
 
 export type RunTrigger = "scheduled" | "manual";
 
@@ -43,21 +44,38 @@ function formatNotify(params: {
   return text;
 }
 
-export async function runTask(
-  taskId: number,
+function formatRednoteNotify(params: {
+  name: string;
+  taskId: number;
+  trigger: RunTrigger;
+  ok: boolean;
+  urls?: string[];
+  error?: string;
+}): string {
+  const status = params.ok ? "OK" : "FAIL";
+  const lines = [
+    `${status}: ${params.name} (id=${params.taskId}) [rednote]`,
+    `trigger=${params.trigger}`,
+  ];
+  if (params.ok && params.urls?.length) {
+    lines.push(`Generated ${params.urls.length} file(s):`);
+    for (const u of params.urls) {
+      lines.push(`• ${u}`);
+    }
+  }
+  if (!params.ok && params.error) {
+    lines.push(`error: ${params.error}`);
+  }
+  let text = lines.join("\n");
+  if (text.length > 4000) text = `${text.slice(0, 3990)}…`;
+  return text;
+}
+
+async function runShellTask(
+  task: { id: number; name: string; command: string },
   trigger: RunTrigger,
   sendMessage: (text: string) => Promise<void>,
 ): Promise<void> {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
-  if (!task) {
-    await sendMessage(`Task id ${taskId} not found.`);
-    return;
-  }
-  if (!task.enabled) {
-    await sendMessage(`Task "${task.name}" (id=${taskId}) is disabled.`);
-    return;
-  }
-
   const maxChars = getMaxLogChars();
   const timeoutMs = getTimeoutMs();
   const startedAt = new Date();
@@ -85,6 +103,7 @@ export async function runTask(
   }
 
   const finishedAt = new Date();
+  const db = getAutomationDb();
   await db.insert(runLogs).values({
     taskId: task.id,
     startedAt,
@@ -106,3 +125,93 @@ export async function runTask(
   });
   await sendMessage(text);
 }
+
+async function runRednoteTask(
+  task: { id: number; name: string; taskConfig: string | null },
+  trigger: RunTrigger,
+  sendMessage: (text: string) => Promise<void>,
+): Promise<void> {
+  const startedAt = new Date();
+  let exitCode = -1;
+  let stdout = "";
+  let stderr = "";
+  let ok = false;
+
+  let config: { url?: string };
+  try {
+    config = task.taskConfig ? (JSON.parse(task.taskConfig) as { url?: string }) : {};
+  } catch {
+    await sendMessage(
+      `FAIL: ${task.name} (id=${task.id}) [rednote]\nbad taskConfig JSON`,
+    );
+    return;
+  }
+
+  if (!config.url) {
+    await sendMessage(
+      `FAIL: ${task.name} (id=${task.id}) [rednote]\nmissing url in taskConfig`,
+    );
+    return;
+  }
+
+  let urls: string[] | undefined;
+  let errorMsg: string | undefined;
+
+  try {
+    urls = await callRednoteApi(config.url);
+    stdout = JSON.stringify(urls);
+    exitCode = 0;
+    ok = true;
+  } catch (err) {
+    errorMsg = err instanceof Error ? err.message : String(err);
+    stderr = errorMsg;
+    exitCode = -1;
+    ok = false;
+  }
+
+  const finishedAt = new Date();
+  const db = getAutomationDb();
+  await db.insert(runLogs).values({
+    taskId: task.id,
+    startedAt,
+    finishedAt,
+    exitCode,
+    stdout,
+    stderr,
+    trigger,
+  });
+
+  const text = formatRednoteNotify({
+    name: task.name,
+    taskId: task.id,
+    trigger,
+    ok,
+    urls,
+    error: errorMsg,
+  });
+  await sendMessage(text);
+}
+
+export async function runTask(
+  taskId: number,
+  trigger: RunTrigger,
+  sendMessage: (text: string) => Promise<void>,
+): Promise<void> {
+  const db = getAutomationDb();
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+  if (!task) {
+    await sendMessage(`Task id ${taskId} not found.`);
+    return;
+  }
+  if (!task.enabled) {
+    await sendMessage(`Task "${task.name}" (id=${taskId}) is disabled.`);
+    return;
+  }
+
+  if (task.taskType === "rednote") {
+    await runRednoteTask(task, trigger, sendMessage);
+  } else {
+    await runShellTask(task, trigger, sendMessage);
+  }
+}
+

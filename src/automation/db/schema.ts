@@ -6,12 +6,12 @@ export const tasks = sqliteTable("tasks", {
   cronExpr: text("cron_expr").notNull(),
   /**
    * "shell"   — run `command` via execa (original behaviour)
-   * "rednote" — call blog2media rednote API; `taskConfig` holds the JSON config
+   * "rednote" — run trigger/poll shell commands from `taskConfig`
    */
   taskType: text("task_type").notNull().default("shell"),
   /** For shell tasks: the shell command. For rednote tasks: unused (kept for schema compat). */
   command: text("command").notNull().default(""),
-  /** JSON string. For rednote tasks: { "url": "https://..." } */
+  /** JSON string. For rednote: mode, triggerCommand (curl, no request body), pollCommandTemplate (async), timeouts */
   taskConfig: text("task_config"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp_ms" })

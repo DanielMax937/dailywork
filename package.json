@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3310",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "db:push": "mkdir -p data && drizzle-kit push",
     "automation:db:push": "mkdir -p data && drizzle-kit push --config=drizzle.automation.config.ts",
     "worker": "tsx src/automation/index.ts",
+    "start:bg": "bash ./start-bg.sh",
+    "stop:bg": "bash ./stop-bg.sh",
     "test:e2e": "playwright test && node scripts/generate-failed-md.mjs || node scripts/generate-failed-md.mjs"
   },
   "dependencies": {

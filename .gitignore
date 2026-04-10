@@ -27,6 +27,11 @@
 .DS_Store
 *.pem
 
+# local bg dev (start-bg.sh)
+/logs/
+dailywork-web.pid
+dailywork-worker.pid
+
 # debug
 npm-debug.log*
 yarn-debug.log*

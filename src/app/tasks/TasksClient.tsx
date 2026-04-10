@@ -46,9 +46,23 @@ function TaskRow({
     });
   };
 
-  const rednoteUrl = task.taskType === "rednote" && task.taskConfig
-    ? (JSON.parse(task.taskConfig) as { url?: string }).url ?? ""
-    : "";
+  const rednoteCfg =
+    task.taskType === "rednote" && task.taskConfig
+      ? (() => {
+          try {
+            return JSON.parse(task.taskConfig) as {
+              mode?: string;
+              triggerCommand?: string;
+              pollCommandTemplate?: string;
+            };
+          } catch {
+            return {};
+          }
+        })()
+      : {};
+  const rednoteMode = rednoteCfg.mode === "sync" ? "sync" : "async";
+  const rednoteTrigger = rednoteCfg.triggerCommand ?? "";
+  const rednotePoll = rednoteCfg.pollCommandTemplate ?? "";
 
   return (
     <li className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
@@ -73,8 +87,22 @@ function TaskRow({
           </div>
           <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             <span className="mr-3">cron: {task.cronExpr}</span>
-            {task.taskType === "rednote" && rednoteUrl && (
-              <span className="break-all">url: {rednoteUrl}</span>
+            {task.taskType === "rednote" && (rednoteTrigger || rednotePoll) && (
+              <span className="break-all">
+                mode: {rednoteMode}
+                {rednoteTrigger && (
+                  <>
+                    {" "}
+                    · trigger: {rednoteTrigger}
+                  </>
+                )}
+                {rednoteMode === "async" && rednotePoll && (
+                  <>
+                    {" "}
+                    · poll: {rednotePoll}
+                  </>
+                )}
+              </span>
             )}
             {task.taskType === "shell" && task.command && (
               <span className="break-all">cmd: {task.command}</span>
@@ -136,8 +164,13 @@ function TaskRow({
   );
 }
 
+const DEFAULT_TRIGGER_CMD = `curl -s -X POST http://127.0.0.1:9300/api/rednote`;
+
+const DEFAULT_POLL_CMD = `curl -s http://127.0.0.1:9300/api/rednote/{{jobId}}`;
+
 function AddTaskForm({ onFeedback }: { onFeedback: (msg: string, ok: boolean) => void }) {
   const [formType, setFormType] = useState<AddFormType>("rednote");
+  const [rednoteMode, setRednoteMode] = useState<"sync" | "async">("async");
   const [isPending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
 
@@ -207,13 +240,45 @@ function AddTaskForm({ onFeedback }: { onFeedback: (msg: string, ok: boolean) =>
         />
 
         {formType === "rednote" ? (
-          <input
-            name="url"
-            type="url"
-            placeholder="Article URL to convert"
-            required
-            className="rounded border border-zinc-200 bg-white px-3 py-2 text-sm outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-          />
+          <>
+            <select
+              name="rednoteMode"
+              value={rednoteMode}
+              onChange={(e) =>
+                setRednoteMode(e.target.value === "sync" ? "sync" : "async")
+              }
+              className="rounded border border-zinc-200 bg-white px-3 py-2 text-sm outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+            >
+              <option value="async">Async (enqueue → poll with jobId)</option>
+              <option value="sync">Sync (stdout = JSON URL array)</option>
+            </select>
+            <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              Trigger command (cron & manual use the same; no request body — e.g. <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">curl -X POST …/api/rednote</code>)
+            </label>
+            <textarea
+              name="triggerCommand"
+              required
+              rows={4}
+              defaultValue={DEFAULT_TRIGGER_CMD}
+              spellCheck={false}
+              className="rounded border border-zinc-200 bg-white px-3 py-2 font-mono text-xs outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+            />
+            {rednoteMode === "async" && (
+              <>
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                  Poll command (must contain <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">{"{{jobId}}"}</code>)
+                </label>
+                <textarea
+                  name="pollCommandTemplate"
+                  required
+                  rows={2}
+                  defaultValue={DEFAULT_POLL_CMD}
+                  spellCheck={false}
+                  className="rounded border border-zinc-200 bg-white px-3 py-2 font-mono text-xs outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                />
+              </>
+            )}
+          </>
         ) : (
           <input
             name="command"

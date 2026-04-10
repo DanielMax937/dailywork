@@ -14,7 +14,7 @@ pnpm dev
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3310](http://localhost:3310) with your browser to see the result.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
@@ -87,6 +87,26 @@ npm run worker
 ```
 
 Bot commands: `/help`, `/list`, `/run <id>`.
+
+**One command (Web on port 3310 + worker)** — see `docs/API.md`:
+
+```bash
+./start-bg.sh
+# ./stop-bg.sh
+```
+
+### Manual HTTP trigger (one-shot)
+
+With the dev server running (`npm run dev` or `./start-bg.sh`, both use port **3310**), you can trigger a task **once** without touching cron (same as **Run Now** / `/run <id>`):
+
+```bash
+curl -sS -X POST "http://127.0.0.1:3310/api/tasks/<taskId>/run"
+```
+
+- **Single execution** — does not start a loop; the existing cron schedule is unchanged.
+- **Same config as cron** — command lives in the task row (`triggerCommand` / `command`); rednote trigger is configured **without** a request body; this HTTP call only passes the task **id** (no POST body).
+- **Disabled tasks** — still run when triggered manually (cron remains off).
+- **Local services** — shell commands and blog2media HTTP calls run **without** `HTTP_PROXY` / `HTTPS_PROXY` so `localhost` is not sent through your proxy.
 
 ### Env (optional)
 

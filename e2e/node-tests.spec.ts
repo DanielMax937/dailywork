@@ -444,7 +444,7 @@ test.describe("RUN-REDNOTE — rednote task execution", () => {
     expect(msgs.some((m) => m.includes("FAIL") || m.includes("missing"))).toBeTruthy();
   });
 
-  test("RUN-RN-02: rednote task missing url in taskConfig notifies error", async () => {
+  test("RUN-RN-02: rednote task missing triggerCommand in taskConfig notifies error", async () => {
     const [row] = await getAutomationDb()
       .insert(tasks)
       .values({
@@ -458,7 +458,7 @@ test.describe("RUN-REDNOTE — rednote task execution", () => {
       .returning();
     const msgs: string[] = [];
     await runTask(row.id!, "manual", async (t) => { msgs.push(t); });
-    expect(msgs.some((m) => m.includes("FAIL") || m.includes("url"))).toBeTruthy();
+    expect(msgs.some((m) => m.includes("FAIL") || m.includes("triggerCommand"))).toBeTruthy();
   });
 
   test("RUN-RN-03: rednote task invalid taskConfig JSON notifies error", async () => {
@@ -486,7 +486,11 @@ test.describe("RUN-REDNOTE — rednote task execution", () => {
         cronExpr: "0 0 * * *",
         taskType: "rednote",
         command: "",
-        taskConfig: JSON.stringify({ url: "http://127.0.0.1:19999/api/rednote" }),
+        taskConfig: JSON.stringify({
+          mode: "async",
+          triggerCommand: `curl -s -X POST http://127.0.0.1:19999/api/rednote`,
+          pollCommandTemplate: `curl -s http://127.0.0.1:19999/api/rednote/{{jobId}}`,
+        }),
         enabled: true,
       })
       .returning();
@@ -513,9 +517,6 @@ test.describe("RUN-REDNOTE — rednote task execution", () => {
     });
     await new Promise<void>((resolve) => server.listen(19998, "127.0.0.1", resolve));
 
-    const prevBase = process.env.BLOG2MEDIA_BASE_URL;
-    process.env.BLOG2MEDIA_BASE_URL = "http://127.0.0.1:19998";
-
     const [row] = await getAutomationDb()
       .insert(tasks)
       .values({
@@ -523,20 +524,21 @@ test.describe("RUN-REDNOTE — rednote task execution", () => {
         cronExpr: "0 0 * * *",
         taskType: "rednote",
         command: "",
-        taskConfig: JSON.stringify({ url: "https://example.com/blog-post" }),
+        taskConfig: JSON.stringify({
+          mode: "sync",
+          triggerCommand: `curl -s -X POST http://127.0.0.1:19998/api/rednote`,
+        }),
         enabled: true,
       })
       .returning();
 
     const msgs: string[] = [];
     await runTask(row.id!, "scheduled", async (t) => { msgs.push(t); });
-
-    process.env.BLOG2MEDIA_BASE_URL = prevBase;
     await new Promise<void>((resolve) => server.close(() => resolve()));
 
     const text = msgs.join("\n");
     expect(text).toMatch(/OK:/);
-    expect(text).toMatch(/rednote/);
+    expect(text).toMatch(/rednote sync/);
     expect(text).toMatch(/cdn\.example\.com/);
 
     // run_log inserted
@@ -547,6 +549,138 @@ test.describe("RUN-REDNOTE — rednote task execution", () => {
     expect(logs.length).toBe(1);
     expect(logs[0].exitCode).toBe(0);
     expect(logs[0].trigger).toBe("scheduled");
+  });
+
+  test("RUN-RN-06: rednote async mode polls until completed", async () => {
+    const http = await import("http");
+    let polls = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/api/rednote") {
+        res.writeHead(202, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jobId: "job-async-1" }));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/rednote/job-async-1") {
+        polls += 1;
+        if (polls < 2) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              jobId: "job-async-1",
+              status: "processing",
+              urls: null,
+            }),
+          );
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jobId: "job-async-1",
+            status: "completed",
+            urls: ["https://cdn.example.com/async.md", "https://cdn.example.com/a.png"],
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(19995, "127.0.0.1", resolve));
+
+    const prevPoll = process.env.REDNOTE_POLL_INTERVAL_MS;
+    process.env.REDNOTE_POLL_INTERVAL_MS = "20";
+
+    const [row] = await getAutomationDb()
+      .insert(tasks)
+      .values({
+        name: "async-mock",
+        cronExpr: "0 0 * * *",
+        taskType: "rednote",
+        command: "",
+        taskConfig: JSON.stringify({
+          mode: "async",
+          triggerCommand: `curl -s -X POST http://127.0.0.1:19995/api/rednote`,
+          pollCommandTemplate: `curl -s http://127.0.0.1:19995/api/rednote/{{jobId}}`,
+        }),
+        enabled: true,
+      })
+      .returning();
+
+    const msgs: string[] = [];
+    await runTask(row.id!, "manual", async (t) => {
+      msgs.push(t);
+    });
+    if (prevPoll !== undefined) process.env.REDNOTE_POLL_INTERVAL_MS = prevPoll;
+    else delete process.env.REDNOTE_POLL_INTERVAL_MS;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    const text = msgs.join("\n");
+    expect(text).toMatch(/OK:/);
+    expect(text).toMatch(/rednote async/);
+    expect(text).toMatch(/job-async-1/);
+    expect(text).toMatch(/async\.md/);
+    expect(polls).toBeGreaterThanOrEqual(2);
+  });
+
+  test("RUN-RN-07: rednote async poll timeout writes log and FAIL telegram", async () => {
+    const http = await import("http");
+    const server = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/api/rednote") {
+        res.writeHead(202, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jobId: "job-stuck" }));
+        return;
+      }
+      if (req.method === "GET" && req.url?.startsWith("/api/rednote/job-stuck")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jobId: "job-stuck",
+            status: "processing",
+            urls: null,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(19994, "127.0.0.1", resolve));
+
+    const [row] = await getAutomationDb()
+      .insert(tasks)
+      .values({
+        name: "async-timeout",
+        cronExpr: "0 0 * * *",
+        taskType: "rednote",
+        command: "",
+        taskConfig: JSON.stringify({
+          mode: "async",
+          triggerCommand: `curl -s -X POST http://127.0.0.1:19994/api/rednote`,
+          pollCommandTemplate: `curl -s http://127.0.0.1:19994/api/rednote/{{jobId}}`,
+          pollTimeoutMs: 120,
+          pollIntervalMs: 30,
+        }),
+        enabled: true,
+      })
+      .returning();
+
+    const msgs: string[] = [];
+    await runTask(row.id!, "scheduled", async (t) => {
+      msgs.push(t);
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    expect(msgs.some((m) => m.includes("FAIL"))).toBeTruthy();
+    expect(msgs.some((m) => m.includes("poll timeout") || m.includes("timeout"))).toBeTruthy();
+    const logs = await getAutomationDb()
+      .select()
+      .from(runLogs)
+      .where(eq(runLogs.taskId, row.id!));
+    expect(logs.length).toBe(1);
+    expect(logs[0].exitCode).toBe(-1);
+    expect(logs[0].trigger).toBe("scheduled");
+    expect(logs[0].stderr.length).toBeGreaterThan(0);
   });
 });
 
@@ -577,53 +711,29 @@ test.describe("ADB-REDNOTE — automation.db rednote schema", () => {
 });
 
 // ============================================================================
-// REDNOTE-CLIENT — unit tests for rednote-client.ts
+// REDNOTE-CLIENT — parsers for rednote stdout (shell commands)
 // ============================================================================
 
-test.describe("REDNOTE-CLIENT — callRednoteApi", () => {
-  test("REDNOTE-CLIENT-01: throws on network error", async () => {
-    const { callRednoteApi } = await import("../src/lib/rednote-client");
-    const prevBase = process.env.BLOG2MEDIA_BASE_URL;
-    process.env.BLOG2MEDIA_BASE_URL = "http://127.0.0.1:29999";
-    await expect(callRednoteApi("https://example.com")).rejects.toThrow(/network error/);
-    process.env.BLOG2MEDIA_BASE_URL = prevBase;
+test.describe("REDNOTE-CLIENT — rednote-client parsers", () => {
+  test("REDNOTE-CLIENT-01: parseRednoteSyncStdout parses JSON array", async () => {
+    const { parseRednoteSyncStdout } = await import("../src/lib/rednote-client");
+    expect(parseRednoteSyncStdout('["a","b"]')).toEqual(["a", "b"]);
   });
 
-  test("REDNOTE-CLIENT-02: throws RednoteApiError on 4xx", async () => {
-    const http = await import("http");
-    const { callRednoteApi, RednoteApiError } = await import("../src/lib/rednote-client");
-    const server = http.createServer((_req, res) => {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "url is required" }));
-    });
-    await new Promise<void>((resolve) => server.listen(19997, "127.0.0.1", resolve));
-    const prevBase = process.env.BLOG2MEDIA_BASE_URL;
-    process.env.BLOG2MEDIA_BASE_URL = "http://127.0.0.1:19997";
-    try {
-      await expect(callRednoteApi("https://example.com")).rejects.toBeInstanceOf(RednoteApiError);
-    } finally {
-      process.env.BLOG2MEDIA_BASE_URL = prevBase;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+  test("REDNOTE-CLIENT-02: parseRednoteSyncStdout throws on non-array", async () => {
+    const { parseRednoteSyncStdout } = await import("../src/lib/rednote-client");
+    expect(() => parseRednoteSyncStdout("{}")).toThrow(/expected JSON array/);
   });
 
-  test("REDNOTE-CLIENT-03: returns string[] on success", async () => {
-    const http = await import("http");
-    const { callRednoteApi } = await import("../src/lib/rednote-client");
-    const expected = ["https://cdn.example.com/out.md", "https://cdn.example.com/img.jpg"];
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(expected));
-    });
-    await new Promise<void>((resolve) => server.listen(19996, "127.0.0.1", resolve));
-    const prevBase = process.env.BLOG2MEDIA_BASE_URL;
-    process.env.BLOG2MEDIA_BASE_URL = "http://127.0.0.1:19996";
-    try {
-      const result = await callRednoteApi("https://example.com/post");
-      expect(result).toEqual(expected);
-    } finally {
-      process.env.BLOG2MEDIA_BASE_URL = prevBase;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+  test("REDNOTE-CLIENT-03: parseRednoteEnqueueStdout reads jobId", async () => {
+    const { parseRednoteEnqueueStdout } = await import("../src/lib/rednote-client");
+    expect(parseRednoteEnqueueStdout('{"jobId":"x-1"}')).toBe("x-1");
+  });
+
+  test("REDNOTE-CLIENT-04: expandJobIdInShellCommand replaces placeholders", async () => {
+    const { expandJobIdInShellCommand } = await import("../src/lib/rednote-client");
+    expect(expandJobIdInShellCommand("curl -s http://h/api/{{jobId}}", "j1")).toBe(
+      "curl -s http://h/api/j1",
+    );
   });
 });

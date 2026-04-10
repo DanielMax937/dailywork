@@ -12,24 +12,25 @@ function projectRoot(): string {
 }
 
 const globalForDb = globalThis as unknown as {
-  sqlite: Database.Database | undefined;
-  drizzle: BetterSQLite3Database<typeof schema> | undefined;
+  automationsqlite: Database.Database | undefined;
+  automationdrizzle: BetterSQLite3Database<typeof schema> | undefined;
 };
 
 function getSqlite(): Database.Database {
-  if (!globalForDb.sqlite) {
+  if (!globalForDb.automationsqlite) {
     const dbPath = path.join(projectRoot(), "data", "automation.db");
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    globalForDb.sqlite = new Database(dbPath);
-    globalForDb.sqlite.pragma("foreign_keys = ON");
+    globalForDb.automationsqlite = new Database(dbPath);
+    globalForDb.automationsqlite.pragma("foreign_keys = ON");
   }
-  return globalForDb.sqlite;
+  return globalForDb.automationsqlite;
 }
 
 export function getAutomationDb() {
-  if (!globalForDb.drizzle) {
-    globalForDb.drizzle = drizzle(getSqlite(), { schema });
+  if (!globalForDb.automationdrizzle) {
+    globalForDb.automationdrizzle = drizzle(getSqlite(), { schema });
   }
-  return globalForDb.drizzle;
+  return globalForDb.automationdrizzle;
 }
+

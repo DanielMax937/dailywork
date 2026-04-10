@@ -1,47 +1,86 @@
 /**
- * HTTP client for the blog2media rednote API.
- * POST /api/rednote  { url }  →  string[]  (mdUrl + imageUrls)
+ * Helpers for rednote tasks that run **shell commands** (e.g. `curl`) configured per task.
+ *
+ * - **Sync**: trigger command prints JSON `string[]` (HTTP 200 body) to stdout.
+ * - **Async**: trigger prints `{ "jobId": "..." }`; poll command uses `{{jobId}}` / `{jobId}`
+ *   and prints `{ jobId, status, urls?, error? }` until `completed` | `failed` | poll timeout.
+ *
+ * Timeouts: `REDNOTE_*` env or optional fields in `taskConfig` (see runner).
  */
-export class RednoteApiError extends Error {
+
+export class RednotePollTimeoutError extends Error {
   constructor(
-    public readonly status: number,
     message: string,
+    public readonly jobId?: string,
   ) {
     super(message);
-    this.name = "RednoteApiError";
+    this.name = "RednotePollTimeoutError";
   }
 }
 
-export async function callRednoteApi(articleUrl: string): Promise<string[]> {
-  const baseUrl =
-    (process.env.BLOG2MEDIA_BASE_URL ?? "http://127.0.0.1:9300").replace(
-      /\/$/,
-      "",
-    );
+export type RednoteJobPollBody = {
+  jobId: string;
+  status: string;
+  error?: string | null;
+  urls?: string[] | null;
+};
 
-  let res: Response;
+/** Replace `{{jobId}}` / `{jobId}` in a full shell command string (e.g. curl URL). */
+export function expandJobIdInShellCommand(template: string, jobId: string): string {
+  return template
+    .replace(/\{\{jobId\}\}/g, jobId)
+    .replace(/\{jobId\}/g, jobId);
+}
+
+/** Sync: stdout must be a JSON array of URL strings. */
+export function parseRednoteSyncStdout(stdout: string): string[] {
+  const trimmed = stdout.trim();
+  let body: unknown;
   try {
-    res = await fetch(`${baseUrl}/api/rednote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: articleUrl }),
-    });
-  } catch (err) {
-    throw new Error(
-      `rednote network error: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    body = JSON.parse(trimmed);
+  } catch {
+    throw new Error("rednote sync: stdout is not valid JSON");
   }
-
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) detail = body.error;
-    } catch {
-      // ignore json parse error
-    }
-    throw new RednoteApiError(res.status, `rednote API ${res.status}: ${detail}`);
+  if (!Array.isArray(body)) {
+    throw new Error("rednote sync: expected JSON array of URLs in stdout");
   }
+  return body as string[];
+}
 
-  return res.json() as Promise<string[]>;
+/** Async enqueue: stdout must be JSON with `jobId`. */
+export function parseRednoteEnqueueStdout(stdout: string): string {
+  const trimmed = stdout.trim();
+  let body: unknown;
+  try {
+    body = JSON.parse(trimmed);
+  } catch {
+    throw new Error("rednote async: enqueue stdout is not valid JSON");
+  }
+  const obj = body as { jobId?: string };
+  if (!obj.jobId || typeof obj.jobId !== "string") {
+    throw new Error("rednote async: enqueue response missing jobId in stdout");
+  }
+  return obj.jobId;
+}
+
+/** One poll step: JSON body with `status` (blog2media-style). */
+export function parseRednotePollStdout(stdout: string): RednoteJobPollBody {
+  const trimmed = stdout.trim();
+  let body: unknown;
+  try {
+    body = JSON.parse(trimmed);
+  } catch {
+    throw new Error("rednote async: poll stdout is not valid JSON");
+  }
+  const row = body as RednoteJobPollBody;
+  if (!row || typeof row !== "object") {
+    throw new Error("rednote async: poll response is not an object");
+  }
+  if (!row.jobId || typeof row.jobId !== "string") {
+    throw new Error("rednote async: poll response missing jobId");
+  }
+  if (!row.status || typeof row.status !== "string") {
+    throw new Error("rednote async: poll response missing status");
+  }
+  return row;
 }

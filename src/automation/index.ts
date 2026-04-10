@@ -24,14 +24,28 @@ async function listTasksText(): Promise<string> {
   const db = getAutomationDb();
   const rows = await db.select().from(tasks).orderBy(asc(tasks.id));
   if (rows.length === 0) {
-    return "No tasks. Use the web UI at http://localhost:3000/tasks to add tasks.";
+    return "No tasks. Use the web UI at http://localhost:3310/tasks to add tasks.";
   }
   const lines = rows.map((t) => {
     const on = t.enabled ? "on" : "off";
     const typeLabel = t.taskType === "rednote" ? "[rednote]" : "[shell]";
     const detail =
       t.taskType === "rednote"
-        ? `url: ${(JSON.parse(t.taskConfig ?? "{}") as { url?: string }).url ?? "(none)"}`
+        ? (() => {
+            try {
+              const c = JSON.parse(t.taskConfig ?? "{}") as {
+                mode?: string;
+                triggerCommand?: string;
+                pollCommandTemplate?: string;
+              };
+              const m = c.mode === "sync" ? "sync" : "async";
+              const trig = c.triggerCommand ?? "(none)";
+              const poll = m === "async" ? `poll: ${c.pollCommandTemplate ?? "(none)"}` : "";
+              return `mode: ${m}\ntrigger: ${trig}${poll ? `\n${poll}` : ""}`;
+            } catch {
+              return "(bad task_config JSON)";
+            }
+          })()
         : `cmd: ${t.command}`;
     return `${t.id}. ${t.name} ${typeLabel} [${on}]\ncron: ${t.cronExpr}\n${detail}`;
   });
@@ -57,9 +71,9 @@ async function main(): Promise<void> {
     },
   });
 
-  await startScheduler((taskId: number) =>
-    runTask(taskId, "scheduled", sendMessage),
-  );
+  await startScheduler(async (taskId: number) => {
+    await runTask(taskId, "scheduled", sendMessage);
+  });
 
   await bot.launch();
   console.log("[worker] Telegram bot running. Press Ctrl+C to stop.");

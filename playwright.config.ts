@@ -15,7 +15,7 @@ export default defineConfig({
     ["json", { outputFile: "test-results/playwright-results.json" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: "http://127.0.0.1:3310",
     trace: "on-first-retry",
   },
   projects: [
@@ -26,7 +26,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run dev",
-    url: "http://127.0.0.1:3000",
+    url: "http://127.0.0.1:3310",
     reuseExistingServer: true,
     timeout: 120_000,
   },
